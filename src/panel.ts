@@ -60,7 +60,7 @@ export class Panel {
   constructor(private callbacks: Callbacks) {
     this.host.setAttribute(OWN_ATTRIBUTE, "panel");
     this.host.style.cssText =
-      "all:initial;display:none;position:fixed;inset:auto 12px auto auto;top:12px;width:min(378px,calc(100vw - 24px));height:auto;max-height:calc(100vh - 24px);overflow:auto;margin:0;padding:0;border:0;background:transparent;z-index:2147483647;color-scheme:light;border-radius:6px;box-shadow:0 2px 8px #00000026;";
+      "all:initial;display:none;position:fixed;inset:auto 12px auto auto;top:12px;width:min(378px,calc(100vw - 24px));height:auto;max-height:calc(100vh - 24px);overflow:auto;margin:0;padding:0;border:0;background:transparent;z-index:2147483647;color-scheme:light dark;border-radius:6px;box-shadow:0 2px 8px #00000026;";
     this.host.setAttribute("popover", "manual");
 
     const style = element("style");
