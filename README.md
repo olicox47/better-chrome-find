@@ -1,7 +1,5 @@
 # Better Chrome Find
 
-<img src="public/icons/icon-128.png" width="64" height="64" alt="Better Chrome Find logo">
-
 A Chrome extension that replaces the built-in Find bar (Cmd/Ctrl+F) with a VS Code-style search: case-sensitive, whole-word and regex toggles that work in any combination. One search per tab.
 
 <picture>
@@ -40,7 +38,7 @@ Everything runs locally, with no network requests. Page text is never stored. Qu
 
 ## Development
 
-Requires Node.js 20.19+ or 22.12+.
+Requires Node.js 20 (20.19 or later), or 22.12 or later.
 
 ```sh
 npm run build          # type-check and bundle into dist/
