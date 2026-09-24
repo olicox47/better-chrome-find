@@ -1,0 +1,150 @@
+:host {
+  all: initial;
+  color-scheme: light;
+}
+* {
+  box-sizing: border-box;
+}
+.panel {
+  font:
+    12px/1.45 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  --bg: #fff;
+  --field: #f0f1f3;
+  --ink: #29313d;
+  --muted: #536177;
+  --line: #dadce0;
+  --hover: #e4eaf3;
+  --accent: #526bc3;
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  width: 22px;
+  height: 24px;
+  padding: 0 3px;
+  line-height: 1;
+}
+button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+button[aria-pressed="true"] {
+  background: #e8edff;
+  color: #3b55b2;
+  box-shadow: inset 0 0 0 1px #b8c6f3;
+}
+.controls {
+  display: grid;
+  grid-template-columns: minmax(60px, 1fr) auto auto repeat(3, 22px);
+  align-items: center;
+  gap: 0;
+  padding: 4px;
+}
+.query {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  background: var(--field);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--ink);
+  padding: 2px 5px;
+  font-size: 12px;
+}
+.query::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+.query:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.toggles {
+  display: flex;
+  gap: 0;
+}
+.toggle {
+  font:
+    11px ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.whole {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.count {
+  display: grid;
+  justify-items: start;
+  padding: 0 5px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Measure the maximum in the same font and locale, including truncation. */
+.count::before {
+  content: attr(data-reserved-count);
+  visibility: hidden;
+}
+.count::before,
+.count > span {
+  grid-area: 1 / 1;
+}
+.error {
+  margin: 0 8px 5px;
+  font-size: 11px;
+  color: #b04343;
+  overflow-wrap: anywhere;
+}
+.error:empty {
+  display: none;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (max-width: 380px) {
+  .controls {
+    grid-template-columns: minmax(40px, 1fr) auto auto repeat(3, 20px);
+    padding: 3px;
+  }
+  button {
+    width: 20px;
+    padding: 0 2px;
+  }
+  .count {
+    font-size: 10px;
+    padding: 0 3px;
+  }
+}

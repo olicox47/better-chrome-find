@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Better Chrome Find</title>
+<style>
+*{box-sizing:border-box}body{width:288px;padding:14px;margin:0;font:13px/1.5 system-ui;color:#29313d;background:#fff;color-scheme:light}h1{font-size:14px;margin:0 0 12px}.setting{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;cursor:pointer}.setting+.setting{border-top:1px solid #eceef1}.detail{display:block;font-size:11px;color:#626d7c;overflow-wrap:anywhere}input{appearance:none;flex:0 0 30px;width:30px;height:18px;margin:0;border-radius:10px;background:#b5bbc4;cursor:pointer;position:relative}input::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;background:white;border-radius:50%;box-shadow:0 1px 2px #0003}input:checked{background:#4565ca}input:checked::after{left:14px}input:disabled{opacity:.45;cursor:default}input:focus-visible{outline:2px solid #4565ca;outline-offset:3px}
+</style></head><body>
+<h1>Better Chrome Find</h1>
+<label class="setting"><span>Enable extension</span><input id="global" type="checkbox" role="switch" aria-label="Enable extension" disabled></label>
+<label class="setting"><span>Enable on this site<span class="detail" id="site-name">Current site</span></span><input id="site" type="checkbox" role="switch" aria-label="Enable on this site" aria-describedby="site-name" disabled></label>
+<script src="action.js"></script></body></html>
