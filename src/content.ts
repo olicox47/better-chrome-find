@@ -4,7 +4,6 @@ import {
   focusedElement,
   send,
   type ContentMessage,
-  type HelloResponse,
   type TabState,
 } from "./types";
 
@@ -26,11 +25,10 @@ if (
   const gated = (next: TabState): TabState =>
     enabled ? next : { ...next, open: false };
   const ready = (async () => {
-    const hello = await send<HelloResponse>({
-      target: "background",
-      type: "HELLO",
-    });
-    if (!hello.identity) throw new Error("Extension connection unavailable.");
+    const hello = await send({ target: "background", type: "HELLO" });
+    if (!("identity" in hello)) {
+      throw new Error("Extension connection unavailable.");
+    }
 
     if (!enablementReceived) enabled = hello.enabled;
     state = gated(hello.state);
@@ -100,7 +98,6 @@ if (
               break;
             case "NAVIGATE":
               runtime.navigate(
-                message.rowId,
                 message.localIndex,
                 message.queryRevision,
                 message.indexRevision,
@@ -188,10 +185,9 @@ if (
   window.addEventListener("pageshow", (event) => {
     if (event.persisted) {
       void ready.then(async (runtime) => {
-        const hello = await send<HelloResponse>({
-          target: "background",
-          type: "HELLO",
-        });
+        const hello = await send({ target: "background", type: "HELLO" });
+        if (!("identity" in hello)) return;
+
         enabled = hello.enabled;
         state = hello.state;
         coordinator?.receiveState(state);

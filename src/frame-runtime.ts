@@ -1,4 +1,5 @@
 import { indexPage, rangeFor, scrollRange, type PageIndex } from "./indexer";
+import { ScrollMarkers } from "./markers";
 import {
   CURRENT_MATCH_COLOUR,
   MATCH_COLOUR,
@@ -7,9 +8,10 @@ import {
   queryKey,
   send,
   type FrameIdentity,
+  type MatchGroup,
   type MatchResult,
   type PaintRequest,
-  type RowSummary,
+  type Search,
   type TabState,
 } from "./types";
 
@@ -35,7 +37,7 @@ export class FrameRuntime {
   private generation = 0;
   private indexRevision = 0;
   private building = false;
-  private cache = new Map<string, CachedMatches>();
+  private cached?: CachedMatches;
   private observer?: MutationObserver;
   private mutationTimer?: ReturnType<typeof setTimeout>;
   private maxMutationTimer?: ReturnType<typeof setTimeout>;
@@ -43,6 +45,7 @@ export class FrameRuntime {
   private sheets: HTMLStyleElement[] = [];
   private styleText = "";
   private highlights = new Set<string>();
+  private markers = new ScrollMarkers();
   private paintGeneration = 0;
   private path: number[] | null = window === window.top ? [] : null;
   private children = new Map<Window, ChildFrame>();
@@ -68,11 +71,11 @@ export class FrameRuntime {
       return;
     }
 
-    if (state.rows.every((row) => !row.query)) this.clearHighlights();
+    if (!state.search.query) this.clearHighlights();
 
     if (!this.index && !this.building) {
       void this.rebuild();
-    } else if (this.index) void this.searchRows();
+    } else if (this.index) void this.search();
   }
 
   private announceFrame(): void {
@@ -257,7 +260,7 @@ export class FrameRuntime {
     const generation = ++this.generation;
     this.indexRevision++;
     this.building = true;
-    this.cache.clear();
+    this.cached = undefined;
     this.paintGeneration++;
     this.report();
     await send({ target: "background", type: "CANCEL" }).catch(() => {});
@@ -278,119 +281,109 @@ export class FrameRuntime {
       }
       if (window !== window.top) this.announceFrame();
       this.observe();
-      await this.searchRows();
+      await this.search();
     } catch (error) {
       if (generation !== this.generation) return;
 
       this.building = false;
       if (!(error instanceof DOMException && error.name === "AbortError")) {
-        for (const row of this.state?.rows ?? []) {
-          this.cache.set(row.id, {
-            key: "",
-            result: {
-              matches: [],
-              truncated: false,
-              error:
-                "This page changed before it could be indexed. Edit a search to retry.",
-            },
-          });
-        }
+        this.cached = {
+          key: "",
+          result: {
+            matches: [],
+            truncated: false,
+            error:
+              "This page changed before it could be indexed. Edit a search to retry.",
+          },
+        };
         this.report();
       }
     }
   }
 
-  private async searchRows(): Promise<void> {
+  private async search(): Promise<void> {
     if (!this.state?.open || !this.index || this.building) return;
 
-    const generation = this.generation;
-    const index = this.index;
-    for (const key of this.cache.keys()) {
-      if (!this.state.rows.some((row) => row.id === key)) {
-        this.cache.delete(key);
+    const { search } = this.state;
+    const key = queryKey(search);
+    let cached = this.cached;
+    if (cached?.key !== key) {
+      cached = this.cached = { key };
+      if (search.query) {
+        cached.pending = this.match(cached, search, this.index);
+      } else {
+        cached.result = { matches: [], truncated: false };
       }
     }
+    this.report();
+    await cached.pending;
+  }
 
-    const promises = this.state.rows.map(async (row) => {
-      const key = queryKey(row);
-      const existing = this.cache.get(row.id);
-      if (existing?.key === key) return existing.pending;
+  private async match(
+    cached: CachedMatches,
+    search: Search,
+    index: PageIndex,
+  ): Promise<void> {
+    const generation = this.generation;
+    const reply = await send({
+      target: "background",
+      type: "MATCH",
+      request: {
+        search,
+        blocks: index.blocks.map(({ text, order }) => ({ text, order })),
+        queryRevision: this.state!.revision,
+        indexRevision: this.indexRevision,
+      },
+    }).catch(
+      (): MatchResult => ({
+        matches: [],
+        truncated: false,
+        error: "Search connection lost. Edit the query to retry.",
+      }),
+    );
+    if (
+      generation !== this.generation ||
+      this.cached !== cached ||
+      !this.state?.open
+    ) {
+      return;
+    }
 
-      const cached: CachedMatches = { key };
-      this.cache.set(row.id, cached);
-      if (!row.query) {
-        cached.result = { matches: [], truncated: false };
-        return;
-      }
+    if ("cancelled" in reply && reply.cancelled) {
+      this.cached = undefined;
+      return;
+    }
 
-      cached.pending = (async () => {
-        const result = await send<MatchResult>({
-          target: "background",
-          type: "MATCH",
-          request: {
-            row,
-            blocks: index.blocks.map(({ text, order }) => ({ text, order })),
-            queryRevision: this.state!.revision,
-            indexRevision: this.indexRevision,
-          },
-        }).catch(
-          (): MatchResult => ({
+    cached.result =
+      "matches" in reply
+        ? reply
+        : {
             matches: [],
             truncated: false,
-            error: "Search connection lost. Edit the query to retry.",
-          }),
-        );
-        if (
-          generation !== this.generation ||
-          this.cache.get(row.id) !== cached ||
-          !this.state?.open
-        ) {
-          return;
-        }
-
-        if (result.cancelled) {
-          this.cache.delete(row.id);
-          return;
-        }
-
-        cached.result = result;
-        cached.pending = undefined;
-        this.report();
-      })();
-
-      return cached.pending;
-    });
+            error: "error" in reply ? reply.error : undefined,
+          };
+    cached.pending = undefined;
     this.report();
-    await Promise.all(promises);
   }
 
   private report(): void {
     if (!this.state?.open) return;
 
-    const rows: RowSummary[] = this.state.rows.map((row) => {
-      const cached = this.cache.get(row.id);
-      const groups: RowSummary["groups"] = [];
-      if (!this.building && cached?.result) {
-        cached.result.matches?.forEach((match, first) => {
-          const order = this.index?.blocks[match.block]?.order;
-          if (order === undefined) return;
+    const result = this.cached?.result;
+    const groups: MatchGroup[] = [];
+    if (!this.building && result) {
+      result.matches.forEach((match, first) => {
+        const order = this.index?.blocks[match.block]?.order;
+        if (order === undefined) return;
 
-          const last = groups.at(-1);
-          if (last?.order === order) {
-            last.count++;
-          } else {
-            groups.push({ order, count: 1, first });
-          }
-        });
-      }
-      return {
-        id: row.id,
-        groups,
-        truncated: cached?.result?.truncated ?? false,
-        error: cached?.result?.error,
-        pending: this.building || (!!row.query && !cached?.result),
-      };
-    });
+        const last = groups.at(-1);
+        if (last?.order === order) {
+          last.count++;
+        } else {
+          groups.push({ order, count: 1, first });
+        }
+      });
+    }
 
     const childDocuments = [...this.children.values()]
       .filter(
@@ -408,7 +401,10 @@ export class FrameRuntime {
         indexRevision: this.indexRevision,
         path: this.path,
         childDocuments,
-        rows,
+        groups,
+        truncated: result?.truncated ?? false,
+        error: result?.error,
+        pending: this.building || (!!this.state.search.query && !result),
       },
     }).catch(() => {});
   }
@@ -423,6 +419,7 @@ export class FrameRuntime {
     this.sheets = [];
 
     this.styleText = "";
+    this.markers.clear();
   }
 
   private isCurrent(queryRevision: number, indexRevision: number): boolean {
@@ -446,36 +443,38 @@ export class FrameRuntime {
     const rules: string[] = [];
     const prepared: [string, Highlight][] = [];
     let tick = performance.now();
-    for (const row of request.rows) {
-      const matches = this.cache.get(row.id)?.result?.matches ?? [];
-      const name = `${this.prefix}-${row.id}`;
-      const highlight = new Highlight();
-      highlight.priority = 20;
-      for (let i = 0; i < Math.min(row.count, matches.length); i++) {
-        if (performance.now() - tick > 8) {
-          await pause();
-          tick = performance.now();
-        }
-        if (!currentRequest()) return;
+    const matches = this.cached?.result?.matches ?? [];
+    const name = this.prefix;
+    const highlight = new Highlight();
+    highlight.priority = 20;
+    const positions: number[] = [];
+    for (let i = 0; i < Math.min(request.count, matches.length); i++) {
+      if (performance.now() - tick > 8) {
+        await pause();
+        tick = performance.now();
+      }
+      if (!currentRequest()) return;
 
-        const range = rangeFor(index, matches[i]);
-        if (range) highlight.add(range);
+      const range = rangeFor(index, matches[i]);
+      if (range) {
+        highlight.add(range);
+        positions.push(range.getBoundingClientRect().top + window.scrollY);
       }
-      prepared.push([name, highlight]);
-      rules.push(
-        `::highlight(${name}){background-color:${MATCH_COLOUR};color:#000000;}`,
-      );
-      rules.push(
-        `::highlight(${name}-current){background-color:${CURRENT_MATCH_COLOUR};color:#000000;text-decoration:underline solid #000000 2px;}`,
-      );
-      if (row.current >= 0 && row.current < row.count && matches[row.current]) {
-        const range = rangeFor(index, matches[row.current]);
-        if (range) {
-          const current = new Highlight(range);
-          current.priority = 100;
-          prepared.push([`${name}-current`, current]);
-        }
-      }
+    }
+    prepared.push([name, highlight]);
+    rules.push(
+      `::highlight(${name}){background-color:${MATCH_COLOUR};color:#000000;}`,
+      `::highlight(${name}-current){background-color:${CURRENT_MATCH_COLOUR};color:#000000;text-decoration:underline solid #000000 2px;}`,
+    );
+    const currentMatch =
+      request.current >= 0 && request.current < request.count
+        ? matches[request.current]
+        : undefined;
+    const currentRange = currentMatch && rangeFor(index, currentMatch);
+    if (currentRange) {
+      const current = new Highlight(currentRange);
+      current.priority = 100;
+      prepared.push([`${name}-current`, current]);
     }
     if (!currentRequest()) return;
 
@@ -507,17 +506,22 @@ export class FrameRuntime {
       if (!names.has(key)) CSS.highlights.delete(key);
     }
     this.highlights = names;
+    this.markers.update(
+      positions,
+      currentRange
+        ? currentRange.getBoundingClientRect().top + window.scrollY
+        : undefined,
+    );
   }
 
   navigate(
-    rowId: string,
     localIndex: number,
     queryRevision: number,
     indexRevision: number,
   ): void {
     if (!this.isCurrent(queryRevision, indexRevision)) return;
 
-    const match = this.cache.get(rowId)?.result?.matches?.[localIndex];
+    const match = this.cached?.result?.matches[localIndex];
     const range = match && rangeFor(this.index!, match);
     if (range) {
       scrollRange(range);
@@ -534,7 +538,7 @@ export class FrameRuntime {
     this.observer?.disconnect();
     this.observer = undefined;
     this.index = undefined;
-    this.cache.clear();
+    this.cached = undefined;
     this.clearHighlights();
     void send({ target: "background", type: "CANCEL" }).catch(() => {});
   }

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { matchBlocks } from "../src/matcher";
-import { createRow, type SearchRow } from "../src/types";
+import { createSearch, type Search } from "../src/types";
 
 const search = (
   text: string,
   query: string,
-  options: Partial<SearchRow> = {},
-) => matchBlocks([{ text, order: 0 }], { ...createRow(), query, ...options });
+  options: Partial<Search> = {},
+) => matchBlocks([{ text, order: 0 }], { ...createSearch(), query, ...options });
 describe("matching options", () => {
   it.each([
     [false, false, false, 2],
@@ -85,7 +85,7 @@ describe("matching options", () => {
           { text: "hello", order: 0 },
           { text: "world", order: 1 },
         ],
-        { ...createRow(), query: "helloworld" },
+        { ...createSearch(), query: "helloworld" },
       ).matches,
     ).toEqual([]);
   });
@@ -95,11 +95,11 @@ describe("matching options", () => {
     ]);
   });
   it("reports truncation only when an additional match exists", () => {
-    const row = { ...createRow(), query: "a" };
-    expect(matchBlocks([{ text: "aa", order: 0 }], row, 2).truncated).toBe(
+    const search = { ...createSearch(), query: "a" };
+    expect(matchBlocks([{ text: "aa", order: 0 }], search, 2).truncated).toBe(
       false,
     );
-    const result = matchBlocks([{ text: "aaa", order: 0 }], row, 2);
+    const result = matchBlocks([{ text: "aaa", order: 0 }], search, 2);
     expect(result.matches).toHaveLength(2);
     expect(result.truncated).toBe(true);
   });

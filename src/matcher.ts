@@ -1,32 +1,32 @@
 import {
   MAX_MATCHES,
   type MatchResult,
-  type SearchRow,
+  type Search,
   type TextBlock,
 } from "./types";
 
 const escapeLiteral = (query: string): string =>
   query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export const compileQuery = (row: SearchRow): RegExp => {
-  const source = row.regex ? row.query : escapeLiteral(row.query);
-  const expression = row.wholeWord
+export const compileQuery = (search: Search): RegExp => {
+  const source = search.regex ? search.query : escapeLiteral(search.query);
+  const expression = search.wholeWord
     ? `(?<![\\p{L}\\p{M}\\p{N}_])(?:${source})(?![\\p{L}\\p{M}\\p{N}_])`
     : source;
-  return new RegExp(expression, `gmu${row.matchCase ? "" : "i"}`);
+  return new RegExp(expression, `gmu${search.matchCase ? "" : "i"}`);
 };
 
 export const matchBlocks = (
   blocks: TextBlock[],
-  row: SearchRow,
+  search: Search,
   limit = MAX_MATCHES,
 ): MatchResult => {
   const matches: MatchResult["matches"] = [];
-  if (!row.query) return { matches, truncated: false };
+  if (!search.query) return { matches, truncated: false };
 
   let expression: RegExp;
   try {
-    expression = compileQuery(row);
+    expression = compileQuery(search);
   } catch (error) {
     return {
       matches,

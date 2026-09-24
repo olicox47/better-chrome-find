@@ -2,12 +2,12 @@ import styles from "./panel.css?inline";
 import {
   MAX_MATCHES,
   OWN_ATTRIBUTE,
-  type RowStatus,
-  type SearchRow,
+  type Search,
+  type SearchStatus,
 } from "./types";
 
 interface Callbacks {
-  change: (changes: Partial<SearchRow>) => void;
+  change: (changes: Partial<Search>) => void;
   navigate: (step: number) => void;
   close: () => void;
 }
@@ -54,7 +54,7 @@ export class Panel {
   private toggles: HTMLButtonElement[];
   private previous: HTMLButtonElement;
   private next: HTMLButtonElement;
-  private row?: SearchRow;
+  private search?: Search;
   private announceTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private callbacks: Callbacks) {
@@ -88,7 +88,7 @@ export class Panel {
         label,
         text,
         () => {
-          if (this.row) callbacks.change({ [key]: !this.row[key] });
+          if (this.search) callbacks.change({ [key]: !this.search[key] });
           this.focus(false);
         },
         `toggle ${key === "wholeWord" ? "whole" : ""}`,
@@ -179,11 +179,11 @@ export class Panel {
     if (select) this.input.select();
   }
 
-  update(row: SearchRow, status?: RowStatus): void {
-    this.row = row;
-    if (this.input.value !== row.query) this.input.value = row.query;
+  update(search: Search, status?: SearchStatus): void {
+    this.search = search;
+    if (this.input.value !== search.query) this.input.value = search.query;
     toggleOptions.forEach(([key], index) =>
-      this.toggles[index].setAttribute("aria-pressed", String(row[key])),
+      this.toggles[index].setAttribute("aria-pressed", String(search[key])),
     );
     const total = status?.total ?? 0;
     const current = status?.total ? status.current + 1 : 0;

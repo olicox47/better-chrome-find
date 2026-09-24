@@ -43,10 +43,10 @@ describe("toolbar enablement", () => {
     expect(await request({ type: "SET_ENABLED", tabId: 3, scope: "site", enabled: false } as BackgroundMessage)).toHaveProperty("error");
   });
   test("site disablement applies to embedded frames while retaining the query", async () => {
-    const saved = createState(); saved.open = true; saved.rows[0].query = "needle"; session["tab:1"] = saved;
+    const saved = createState(); saved.open = true; saved.search.query = "needle"; session["tab:1"] = saved;
     await request({ type: "SET_ENABLED", tabId: 1, scope: "site", enabled: false } as BackgroundMessage);
     const frame = await request({ type: "HELLO" }, 1, 7);
-    expect(frame.enabled).toBe(false); expect(frame.state.open).toBe(false); expect(frame.state.rows[0].query).toBe("needle");
+    expect(frame.enabled).toBe(false); expect(frame.state.open).toBe(false); expect(frame.state.search.query).toBe("needle");
     expect((await request({ type: "HELLO" }, 2)).enabled).toBe(true);
     expect(deliver).toHaveBeenCalledWith(1, { target: "content", type: "ENABLEMENT", enabled: false }, undefined);
     expect(local.enablement).toEqual({ enabled: true, disabledSites: ["example.com"] });

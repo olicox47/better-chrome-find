@@ -1,4 +1,4 @@
-import { send, type BackgroundMessage } from "./types";
+import { send, type MessageOf } from "./types";
 import type { ToolbarState } from "./preferences";
 
 const globalSwitch = document.getElementById("global") as HTMLInputElement;
@@ -9,9 +9,11 @@ let tabId: number | undefined;
 
 let menu: ToolbarState | undefined;
 
-const request = async (message: BackgroundMessage): Promise<ToolbarState> => {
-  const result = await send<ToolbarState & { error?: string }>(message);
-  if (result.error) throw new Error(result.error);
+const request = async (
+  message: MessageOf<"TOOLBAR_STATE" | "SET_ENABLED">,
+): Promise<ToolbarState> => {
+  const result = await send(message);
+  if ("error" in result) throw new Error(result.error);
   return result;
 };
 

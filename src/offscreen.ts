@@ -1,8 +1,7 @@
-import type { MatchRequest, MatchResult } from "./types";
+import type { MatchRequest, MatchResult, OffscreenMessage } from "./types";
 
 interface Job {
   key: string;
-  prefix: string;
   request: MatchRequest;
   reply: (result: MatchResult) => void;
   worker?: Worker;
@@ -48,12 +47,9 @@ const finish = (job: Job, result: MatchResult): void => {
   pump();
 };
 
-const cancel = (prefix: string): void => {
-  for (const job of [...jobs.values()]) {
-    if (job.prefix === prefix) {
-      finish(job, cancelled());
-    }
-  }
+const cancel = (key: string): void => {
+  const job = jobs.get(key);
+  if (job) finish(job, cancelled());
 };
 
 const pump = (): void => {
@@ -81,30 +77,30 @@ const pump = (): void => {
   }
 };
 
-chrome.runtime.onMessage.addListener((message, _sender, reply) => {
-  if (message?.target !== "offscreen") return;
+chrome.runtime.onMessage.addListener(
+  (message: OffscreenMessage, _sender, reply) => {
+    if (message?.target !== "offscreen") return;
 
-  if (message.type === "CANCEL") {
-    cancel(message.prefix);
-    reply({ ok: true });
-    return;
-  }
+    if (message.type === "CANCEL") {
+      cancel(message.key);
+      reply({ ok: true });
+      return;
+    }
 
-  if (message.type !== "MATCH") return;
+    if (message.type !== "MATCH") return;
 
-  const old = jobs.get(message.key);
-  if (old) finish(old, cancelled());
+    cancel(message.key);
 
-  const job: Job = {
-    key: message.key,
-    prefix: message.prefix,
-    request: message.request,
-    reply,
-    done: false,
-  };
-  jobs.set(job.key, job);
-  queue.push(job);
+    const job: Job = {
+      key: message.key,
+      request: message.request,
+      reply,
+      done: false,
+    };
+    jobs.set(job.key, job);
+    queue.push(job);
 
-  pump();
-  return true;
-});
+    pump();
+    return true;
+  },
+);

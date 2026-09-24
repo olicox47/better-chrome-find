@@ -1,10 +1,18 @@
 import {
   createState,
   frameKey,
-  singleSearchState,
+  readState,
+  type ActivateResponse,
   type BackgroundMessage,
+  type BackgroundMessageType,
+  type BackgroundReplies,
   type ContentMessage,
+  type ExtensionPageMessageType,
   type FrameIdentity,
+  type IgnoredReply,
+  type MatchResult,
+  type MessageOf,
+  type OffscreenMessage,
   type TabState,
 } from "./types";
 
@@ -89,10 +97,10 @@ const closeIfDisabled = async (
 };
 
 const state = async (tabId: number): Promise<TabState> => {
-  const saved = (await chrome.storage.session.get(sessionKey(tabId)))[
+  const saved: unknown = (await chrome.storage.session.get(sessionKey(tabId)))[
     sessionKey(tabId)
-  ] as TabState | undefined;
-  const value = saved ? singleSearchState(saved) : createState();
+  ];
+  const value = readState(saved) ?? createState();
   await closeIfDisabled(tabId, value);
   if (JSON.stringify(value) !== JSON.stringify(saved)) {
     await chrome.storage.session.set({ [sessionKey(tabId)]: value });
@@ -157,9 +165,7 @@ const deliver = async (
   );
 };
 
-const activate = async (
-  tabId: number,
-): Promise<{ ok: boolean; error?: string }> => {
+const activate = async (tabId: number): Promise<ActivateResponse> => {
   try {
     const tab = await chrome.tabs.get(tabId);
     if (!supportedPage(tab.url)) {
@@ -210,16 +216,18 @@ const identityOf = (sender: chrome.runtime.MessageSender): FrameIdentity => {
   };
 };
 
-const handle = async (
-  message: BackgroundMessage,
-  sender: chrome.runtime.MessageSender,
-): Promise<unknown> => {
-  if (message.type === "TOOLBAR_STATE" || message.type === "SET_ENABLED") {
-    if (!sender.url?.startsWith(chrome.runtime.getURL(""))) {
-      throw new Error("Only extension pages can change enablement.");
-    }
-    if (message.type === "TOOLBAR_STATE") return toolbarState(message.tabId);
+const toOffscreen = <R>(message: OffscreenMessage): Promise<R> =>
+  chrome.runtime.sendMessage(message);
 
+type FrameMessageType = Exclude<BackgroundMessageType, ExtensionPageMessageType>;
+
+const extensionPageHandlers: {
+  [T in ExtensionPageMessageType]: (
+    message: MessageOf<T>,
+  ) => Promise<BackgroundReplies[T]>;
+} = {
+  TOOLBAR_STATE: (message) => toolbarState(message.tabId),
+  SET_ENABLED: async (message) => {
     if (
       typeof message.enabled !== "boolean" ||
       !["global", "site"].includes(message.scope)
@@ -227,105 +235,137 @@ const handle = async (
       throw new Error("Invalid enablement preference.");
     }
     return setEnabled(message.tabId, message.scope, message.enabled);
-  }
-  if (message.type === "ACTIVATE") {
-    if (!sender.url?.startsWith(chrome.runtime.getURL(""))) {
-      throw new Error("Only extension pages can activate tabs.");
+  },
+  ACTIVATE: (message) => activate(message.tabId),
+};
+
+const frameHandlers: {
+  [T in FrameMessageType]: (
+    message: MessageOf<T>,
+    identity: FrameIdentity,
+  ) => Promise<BackgroundReplies[T]>;
+} = {
+  HELLO: (_message, identity) =>
+    serial(identity.tabId, async () => ({
+      identity,
+      state: await state(identity.tabId),
+      enabled: (await toolbarState(identity.tabId)).enabled,
+    })),
+  SAVE_STATE: (message, { tabId, frameId }) =>
+    serial(tabId, async () => {
+      if (frameId !== 0) {
+        throw new Error("Only the top frame controls tab state.");
+      }
+      const current = await state(tabId);
+      if (message.state.revision < current.revision) return current;
+
+      const value = readState(message.state);
+      if (!value) throw new Error("Invalid search state.");
+
+      await closeIfDisabled(tabId, value);
+      await chrome.storage.session.set({ [sessionKey(tabId)]: value });
+      await deliver(tabId, {
+        target: "content",
+        type: "STATE",
+        state: value,
+      }).catch(() => {});
+      return value;
+    }),
+  OPEN: async (message, identity) => {
+    if (!(await toolbarState(identity.tabId)).enabled) return { ok: false };
+    return deliver(
+      identity.tabId,
+      {
+        target: "content",
+        type: "OPEN",
+        seed: message.seed,
+        source: identity,
+      },
+      0,
+    );
+  },
+  CLOSE: (_message, { tabId }) =>
+    deliver(tabId, { target: "content", type: "CLOSE" }, 0),
+  MATCH: async (message, identity) => {
+    await ensureOffscreen();
+    return toOffscreen<MatchResult>({
+      target: "offscreen",
+      type: "MATCH",
+      key: frameKey(identity),
+      request: message.request,
+    });
+  },
+  CANCEL: async (_message, identity) => {
+    if (await hasOffscreen()) {
+      await toOffscreen({
+        target: "offscreen",
+        type: "CANCEL",
+        key: frameKey(identity),
+      });
     }
-    return activate(message.tabId);
+    return { ok: true };
+  },
+  SUMMARY: (message, identity) =>
+    deliver(
+      identity.tabId,
+      {
+        target: "content",
+        type: "SUMMARY",
+        summary: { ...message.summary, identity },
+      },
+      0,
+    ).catch(() => {}),
+  ROUTE: async (message, { tabId, frameId }) => {
+    if (frameId !== 0 || message.destination.tabId !== tabId) {
+      throw new Error("Invalid frame route.");
+    }
+    return deliver(
+      tabId,
+      message.message,
+      undefined,
+      message.destination.documentId,
+    ).catch(() => ({ missing: true }));
+  },
+};
+
+const isExtensionPageMessage = (
+  message: BackgroundMessage,
+): message is MessageOf<ExtensionPageMessageType> =>
+  message.type === "TOOLBAR_STATE" ||
+  message.type === "SET_ENABLED" ||
+  message.type === "ACTIVATE";
+
+const handle = async (
+  message: BackgroundMessage,
+  sender: chrome.runtime.MessageSender,
+): Promise<unknown> => {
+  if (isExtensionPageMessage(message)) {
+    if (!sender.url?.startsWith(chrome.runtime.getURL(""))) {
+      throw new Error(
+        message.type === "ACTIVATE"
+          ? "Only extension pages can activate tabs."
+          : "Only extension pages can change enablement.",
+      );
+    }
+    // TypeScript cannot correlate a union message with its handler; the map's
+    // own type already checks each handler against its message and reply.
+    const handler = extensionPageHandlers[message.type] as (
+      message: BackgroundMessage,
+    ) => Promise<unknown>;
+    return handler(message);
   }
   const identity = identityOf(sender);
-  const { tabId, frameId } = identity;
   if (sender.documentLifecycle && sender.documentLifecycle !== "active") {
-    return { ignored: true };
+    return { ignored: true } satisfies IgnoredReply;
   }
-  switch (message.type) {
-    case "HELLO":
-      return serial(tabId, async () => ({
-        identity,
-        state: await state(tabId),
-        enabled: (await toolbarState(tabId)).enabled,
-      }));
-    case "SAVE_STATE":
-      return serial(tabId, async () => {
-        if (frameId !== 0) {
-          throw new Error("Only the top frame controls tab state.");
-        }
-        const current = await state(tabId);
-        if (message.state.revision < current.revision) return current;
-
-        if (
-          !Array.isArray(message.state.rows) ||
-          message.state.rows.length !== 1
-        ) {
-          throw new Error("Exactly one search is supported.");
-        }
-        const value = singleSearchState(message.state);
-        await closeIfDisabled(tabId, value);
-        await chrome.storage.session.set({ [sessionKey(tabId)]: value });
-        await deliver(tabId, {
-          target: "content",
-          type: "STATE",
-          state: value,
-        }).catch(() => {});
-        return value;
-      });
-    case "OPEN":
-      if (!(await toolbarState(tabId)).enabled) return { ok: false };
-      return deliver(
-        tabId,
-        {
-          target: "content",
-          type: "OPEN",
-          seed: message.seed,
-          source: identity,
-        },
-        0,
-      );
-    case "CLOSE":
-      return deliver(tabId, { target: "content", type: "CLOSE" }, 0);
-    case "MATCH": {
-      await ensureOffscreen();
-      return chrome.runtime.sendMessage({
-        target: "offscreen",
-        type: "MATCH",
-        key: `${frameKey(identity)}/${message.request.row.id}`,
-        prefix: frameKey(identity),
-        request: message.request,
-      });
-    }
-    case "CANCEL": {
-      if (await hasOffscreen()) {
-        await chrome.runtime.sendMessage({
-          target: "offscreen",
-          type: "CANCEL",
-          prefix: frameKey(identity),
-        });
-      }
-      return { ok: true };
-    }
-    case "SUMMARY":
-      return deliver(
-        tabId,
-        {
-          target: "content",
-          type: "SUMMARY",
-          summary: { ...message.summary, identity },
-        },
-        0,
-      ).catch(() => {});
-    case "ROUTE": {
-      if (frameId !== 0 || message.destination.tabId !== tabId) {
-        throw new Error("Invalid frame route.");
-      }
-      return deliver(
-        tabId,
-        message.message,
-        undefined,
-        message.destination.documentId,
-      ).catch(() => ({ missing: true }));
-    }
-  }
+  const handler = (
+    Object.hasOwn(frameHandlers, message.type)
+      ? frameHandlers[message.type]
+      : undefined
+  ) as
+    | ((message: BackgroundMessage, identity: FrameIdentity) => Promise<unknown>)
+    | undefined;
+  return handler?.(message, identity);
 };
 
 chrome.runtime.onMessage.addListener(

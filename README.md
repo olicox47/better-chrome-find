@@ -24,7 +24,7 @@ The extension isn't on the Chrome Web Store, so you build it and load it unpacke
 | Escape | Close the bar and clear highlights |
 | Cmd+Shift+F / Ctrl+Shift+F | Fallback shortcut (set at `chrome://extensions/shortcuts`) |
 
-**Aa**, **ab** and **.\*** toggle case, whole-word and regex matching. The toolbar icon lets you disable the extension everywhere or just for the current site; disabled pages use Chrome's native Find. Queries last for the tab's browser session.
+**Aa**, **ab** and **.\*** toggle case, whole-word and regex matching. Marks along the right edge of the page show where every match is, with the current one in orange. The toolbar icon lets you disable the extension everywhere or just for the current site; disabled pages use Chrome's native Find. Queries last for the tab's browser session.
 
 ## Limits
 

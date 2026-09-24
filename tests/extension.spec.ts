@@ -278,22 +278,19 @@ test("isolates panel typing from page capture and bubble shortcuts while preserv
   expect(await recorded()).toContain("keydown:q"); // Page shortcuts still work outside the panel.
 });
 
-test("legacy sessions retain only the active query", async () => {
+test("session state from older versions starts a fresh search", async () => {
   await worker.evaluate(async () => {
     const [tab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
     });
-    const rows = ["alpha", "beta", "Gamma", "delta", "Alpha"].map(
-      (query, index) => ({
-        id: `saved-${index}`,
-        query,
-        matchCase: true,
-        wholeWord: true,
-        regex: false,
-        colour: "#FF0000",
-      }),
-    );
+    const rows = ["alpha", "beta"].map((query, index) => ({
+      id: `saved-${index}`,
+      query,
+      matchCase: true,
+      wholeWord: true,
+      regex: false,
+    }));
     await chrome.storage.session.set({
       [`tab:${tab.id}`]: {
         rows,
@@ -311,12 +308,12 @@ test("legacy sessions retain only the active query", async () => {
     });
   });
   await page.reload();
-  await expect(field()).toHaveValue("beta");
-  await expect(counts().first()).toHaveText("1 / 1");
+  await open();
+  await expect(field()).toHaveValue("");
   await expect(rows()).toHaveCount(1);
   await expect(
     rows().first().locator('.toggle[aria-pressed="true"]'),
-  ).toHaveCount(2);
+  ).toHaveCount(0);
   const saved = await worker.evaluate(async () => {
     const [tab] = await chrome.tabs.query({
       active: true,
@@ -326,19 +323,13 @@ test("legacy sessions retain only the active query", async () => {
       `tab:${tab.id}`
     ] as TabState;
   });
-  expect(saved.rows).toEqual([
-    {
-      id: "saved-1",
-      query: "beta",
-      matchCase: true,
-      wholeWord: true,
-      regex: false,
-    },
-  ]);
-  expect(saved.activeRowId).toBe("saved-1");
-  await page.keyboard.press("Escape");
-  await open();
-  await expect(field()).toHaveValue("beta");
+  expect(saved.search).toEqual({
+    query: "",
+    matchCase: false,
+    wholeWord: false,
+    regex: false,
+  });
+  expect(saved).not.toHaveProperty("rows");
   expect(
     await worker.evaluate(() => chrome.runtime.getManifest().options_ui),
   ).toBeUndefined();

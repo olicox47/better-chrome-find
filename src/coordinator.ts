@@ -7,9 +7,9 @@ import {
   send,
   type FrameIdentity,
   type FrameSummary,
-  type RowPaint,
-  type RowStatus,
-  type SearchRow,
+  type PaintRequest,
+  type Search,
+  type SearchStatus,
   type TabState,
 } from "./types";
 
@@ -37,14 +37,14 @@ const localIndex = (group: NavigationGroup, index: number): number =>
 export class Coordinator {
   private panel?: Panel;
   private summaries = new Map<string, FrameSummary>();
-  private statuses = new Map<string, RowStatus>();
-  private selected = new Map<string, number>();
-  private groups = new Map<string, NavigationGroup[]>();
+  private status?: SearchStatus;
+  private selected = 0;
+  private groups: NavigationGroup[] = [];
   private debounce?: ReturnType<typeof setTimeout>;
   private repaintTimer?: ReturnType<typeof setTimeout>;
   private previousFocus?: HTMLElement;
   private sourceFrame?: FrameIdentity;
-  private pendingReveal?: string;
+  private pendingReveal = false;
   private pendingRevealRevision = -1;
   private lastPaint = new Map<string, string>();
 
@@ -60,8 +60,8 @@ export class Coordinator {
 
   private ensurePanel(): Panel {
     return (this.panel ??= new Panel({
-      change: (change) => this.change(this.state.rows[0].id, change),
-      navigate: (step) => this.navigate(this.state.rows[0].id, step),
+      change: (changes) => this.change(changes),
+      navigate: (step) => this.navigate(step),
       close: () => this.close(),
     }));
   }
@@ -76,13 +76,12 @@ export class Coordinator {
       this.sourceFrame = source;
     }
     const panel = this.ensurePanel();
-    const row = this.state.rows[0];
-    if (!row.query && seed) {
-      row.query = seed;
-      this.pendingReveal = row.id;
+    const { search } = this.state;
+    if (!search.query && seed) {
+      search.query = seed;
+      this.pendingReveal = true;
     }
     this.state.open = true;
-    this.state.activeRowId = row.id;
     panel.show();
     this.commit();
     panel.focus();
@@ -90,7 +89,7 @@ export class Coordinator {
 
   close(): void {
     this.state.open = false;
-    this.pendingReveal = undefined;
+    this.pendingReveal = false;
     this.summaries.clear();
     this.lastPaint.clear();
     this.panel?.hide();
@@ -133,27 +132,24 @@ export class Coordinator {
     }).catch(() => {});
   }
 
-  private change(id: string, changes: Partial<SearchRow>): void {
-    const row = this.state.rows.find((row) => row.id === id);
-    if (!row) return;
-
-    Object.assign(row, changes);
-    this.state.activeRowId = id;
+  private change(changes: Partial<Search>): void {
+    const { search } = this.state;
+    Object.assign(search, changes);
     if (
       "query" in changes ||
       "matchCase" in changes ||
       "wholeWord" in changes ||
       "regex" in changes
     ) {
-      this.selected.set(id, 0);
-      this.pendingReveal = id;
+      this.selected = 0;
+      this.pendingReveal = true;
       this.pendingRevealRevision = -1;
-      this.statuses.set(id, {
+      this.status = {
         current: 0,
         total: 0,
         truncated: false,
-        pending: !!row.query,
-      });
+        pending: !!search.query,
+      };
     }
     this.render();
     clearTimeout(this.debounce);
@@ -196,106 +192,98 @@ export class Coordinator {
     );
     const reachable: FrameSummary[] = [];
     const visited = new Set<string>();
-    let waiting = false;
+    let pending = false;
     const visit = (documentId: string): void => {
       if (visited.has(documentId)) return;
 
       visited.add(documentId);
       const frame = byDocument.get(documentId);
       if (!frame || frame.path === null) {
-        waiting = true;
+        pending = true;
         return;
       }
       reachable.push(frame);
       frame.childDocuments.forEach(visit);
     };
     visit(this.identity.documentId);
-    const paint = new Map<string, RowPaint[]>();
-    for (const row of this.state.rows) {
-      const candidates: NavigationGroup[] = [];
-      let pending = waiting;
-      let truncated = false;
-      const errors = new Set<string>();
-      for (const frame of reachable) {
-        const result = frame.rows.find((result) => result.id === row.id);
-        if (!result) {
-          pending = true;
-          continue;
-        }
-        pending ||= result.pending ?? false;
-        truncated ||= result.truncated;
-        if (result.error) errors.add(result.error);
-        for (const group of result.groups) {
-          candidates.push({
-            identity: frame.identity,
-            indexRevision: frame.indexRevision,
-            first: group.first,
-            count: group.count,
-            globalStart: 0,
-            path: [...frame.path!, group.order],
-          });
-        }
-      }
-      const error = [...errors].join(" · ") || undefined;
-      if (row.query && pending) {
-        // Partial frame results must not reset the selected match or replace a
-        // complete highlight set with an empty or incomplete one.
-        const previous = this.statuses.get(row.id);
-        this.statuses.set(row.id, {
-          current: previous?.current ?? 0,
-          total: previous?.total ?? 0,
-          truncated: previous?.truncated ?? false,
-          pending: true,
-          error,
+
+    const candidates: NavigationGroup[] = [];
+    let truncated = false;
+    const errors = new Set<string>();
+    for (const frame of reachable) {
+      pending ||= frame.pending;
+      truncated ||= frame.truncated;
+      if (frame.error) errors.add(frame.error);
+      for (const group of frame.groups) {
+        candidates.push({
+          identity: frame.identity,
+          indexRevision: frame.indexRevision,
+          first: group.first,
+          count: group.count,
+          globalStart: 0,
+          path: [...frame.path!, group.order],
         });
-        continue;
-      }
-      candidates.sort((a, b) => comparePath(a.path, b.path));
-      const groups: NavigationGroup[] = [];
-      let total = 0;
-      for (const candidate of candidates) {
-        const count = Math.min(candidate.count, MAX_MATCHES - total);
-        if (count < candidate.count) truncated = true;
-        if (count > 0) groups.push({ ...candidate, count, globalStart: total });
-        total += count;
-      }
-      this.groups.set(row.id, groups);
-      const current = Math.min(
-        this.selected.get(row.id) ?? 0,
-        Math.max(0, total - 1),
-      );
-      this.selected.set(row.id, current);
-      this.statuses.set(row.id, {
-        current,
-        total,
-        truncated,
-        pending: false,
-        error,
-      });
-      for (const frame of reachable) {
-        const key = frameKey(frame.identity);
-        const ownGroups = groups.filter(
-          (group) => frameKey(group.identity) === key,
-        );
-        const activeGroup = groupContaining(ownGroups, current);
-        const list = paint.get(key) ?? [];
-        list.push({
-          id: row.id,
-          count: ownGroups.reduce((sum, group) => sum + group.count, 0),
-          current: activeGroup ? localIndex(activeGroup, current) : -1,
-        });
-        paint.set(key, list);
       }
     }
+    const error = [...errors].join(" · ") || undefined;
+
+    if (this.state.search.query && pending) {
+      // Partial frame results must not reset the selected match or replace a
+      // complete highlight set with an empty or incomplete one.
+      this.status = {
+        current: this.status?.current ?? 0,
+        total: this.status?.total ?? 0,
+        truncated: this.status?.truncated ?? false,
+        pending: true,
+        error,
+      };
+    } else {
+      this.paint(candidates, reachable, truncated, error);
+    }
+
+    this.render();
+    if (
+      this.pendingReveal &&
+      this.pendingRevealRevision === this.state.revision &&
+      this.status &&
+      !this.status.pending
+    ) {
+      this.pendingReveal = false;
+      if (this.status.total) this.reveal();
+    }
+  }
+
+  private paint(
+    candidates: NavigationGroup[],
+    reachable: FrameSummary[],
+    truncated: boolean,
+    error: string | undefined,
+  ): void {
+    candidates.sort((a, b) => comparePath(a.path, b.path));
+    const groups: NavigationGroup[] = [];
+    let total = 0;
+    for (const candidate of candidates) {
+      const count = Math.min(candidate.count, MAX_MATCHES - total);
+      if (count < candidate.count) truncated = true;
+      if (count > 0) groups.push({ ...candidate, count, globalStart: total });
+      total += count;
+    }
+    this.groups = groups;
+    const current = Math.min(this.selected, Math.max(0, total - 1));
+    this.selected = current;
+    this.status = { current, total, truncated, pending: false, error };
+
     for (const frame of reachable) {
       const key = frameKey(frame.identity);
-      const rows = paint.get(key);
-      if (!rows) continue;
-
-      const request = {
+      const ownGroups = groups.filter(
+        (group) => frameKey(group.identity) === key,
+      );
+      const activeGroup = groupContaining(ownGroups, current);
+      const request: PaintRequest = {
         queryRevision: this.state.revision,
         indexRevision: frame.indexRevision,
-        rows,
+        count: ownGroups.reduce((sum, group) => sum + group.count, 0),
+        current: activeGroup ? localIndex(activeGroup, current) : -1,
       };
       const signature = JSON.stringify(request);
       if (this.lastPaint.get(key) === signature) continue;
@@ -308,35 +296,19 @@ export class Coordinator {
         message: { target: "content", type: "PAINT", request },
       });
     }
-    this.render();
-    if (
-      this.pendingReveal &&
-      this.pendingRevealRevision === this.state.revision
-    ) {
-      const status = this.statuses.get(this.pendingReveal);
-      if (status && !status.pending) {
-        const id = this.pendingReveal;
-        this.pendingReveal = undefined;
-        if (status.total) this.reveal(id);
-      }
-    }
   }
 
-  private navigate(id: string, step: number): void {
-    const status = this.statuses.get(id);
+  private navigate(step: number): void {
+    const status = this.status;
     if (!status?.total || status.pending) return;
 
-    this.selected.set(
-      id,
-      ((this.selected.get(id) ?? 0) + step + status.total) % status.total,
-    );
+    this.selected = (this.selected + step + status.total) % status.total;
     this.reconcile();
-    this.reveal(id);
+    this.reveal();
   }
 
-  private reveal(id: string): void {
-    const current = this.selected.get(id) ?? 0;
-    const group = groupContaining(this.groups.get(id) ?? [], current);
+  private reveal(): void {
+    const group = groupContaining(this.groups, this.selected);
     if (!group) return;
 
     void send({
@@ -346,8 +318,7 @@ export class Coordinator {
       message: {
         target: "content",
         type: "NAVIGATE",
-        rowId: id,
-        localIndex: localIndex(group, current),
+        localIndex: localIndex(group, this.selected),
         queryRevision: this.state.revision,
         indexRevision: group.indexRevision,
       },
@@ -355,7 +326,6 @@ export class Coordinator {
   }
 
   private render(): void {
-    const row = this.state.rows[0];
-    this.panel?.update(row, this.statuses.get(row.id));
+    this.panel?.update(this.state.search, this.status);
   }
 }

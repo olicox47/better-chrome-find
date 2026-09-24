@@ -1,10 +1,11 @@
+import type { ToolbarState } from "./preferences";
+
 export const MAX_MATCHES = 10_000;
 export const MATCH_COLOUR = "#FFFF00";
 export const CURRENT_MATCH_COLOUR = "#FF9632";
 export const OWN_ATTRIBUTE = "data-better-chrome-find";
 
-export interface SearchRow {
-  id: string;
+export interface Search {
   query: string;
   matchCase: boolean;
   wholeWord: boolean;
@@ -12,8 +13,7 @@ export interface SearchRow {
 }
 
 export interface TabState {
-  rows: SearchRow[];
-  activeRowId: string;
+  search: Search;
   open: boolean;
   revision: number;
 }
@@ -43,7 +43,7 @@ export interface MatchResult {
 }
 
 export interface MatchRequest {
-  row: SearchRow;
+  search: Search;
   blocks: TextBlock[];
   queryRevision: number;
   indexRevision: number;
@@ -55,36 +55,26 @@ export interface MatchGroup {
   first: number;
 }
 
-export interface RowSummary {
-  id: string;
-  groups: MatchGroup[];
-  truncated: boolean;
-  error?: string;
-  pending?: boolean;
-}
-
 export interface FrameSummary {
   identity: FrameIdentity;
   queryRevision: number;
   indexRevision: number;
   path: number[] | null;
   childDocuments: string[];
-  rows: RowSummary[];
-}
-
-export interface RowPaint {
-  id: string;
-  count: number;
-  current: number;
+  groups: MatchGroup[];
+  truncated: boolean;
+  error?: string;
+  pending: boolean;
 }
 
 export interface PaintRequest {
   queryRevision: number;
   indexRevision: number;
-  rows: RowPaint[];
+  count: number;
+  current: number;
 }
 
-export interface RowStatus {
+export interface SearchStatus {
   current: number;
   total: number;
   truncated: boolean;
@@ -120,6 +110,59 @@ export type BackgroundMessage =
       message: ContentMessage;
     };
 
+export type BackgroundMessageType = BackgroundMessage["type"];
+
+/** Messages only the toolbar popup may send. Webpage frames send the rest. */
+export type ExtensionPageMessageType = "TOOLBAR_STATE" | "SET_ENABLED" | "ACTIVATE";
+
+export type MessageOf<T extends BackgroundMessageType> = Extract<
+  BackgroundMessage,
+  { type: T }
+>;
+
+export interface HelloResponse {
+  enabled: boolean;
+  identity: FrameIdentity;
+  state: TabState;
+}
+
+export interface ActivateResponse {
+  ok: boolean;
+  error?: string;
+}
+
+export interface BackgroundReplies {
+  HELLO: HelloResponse;
+  TOOLBAR_STATE: ToolbarState;
+  SET_ENABLED: ToolbarState;
+  SAVE_STATE: TabState;
+  OPEN: unknown;
+  CLOSE: unknown;
+  ACTIVATE: ActivateResponse;
+  MATCH: MatchResult;
+  CANCEL: { ok: true };
+  SUMMARY: unknown;
+  ROUTE: unknown;
+}
+
+export interface ErrorReply {
+  error: string;
+}
+
+/** Sent instead of a reply when the sending document is no longer active. */
+export interface IgnoredReply {
+  ignored: true;
+}
+
+export type BackgroundReply<T extends BackgroundMessageType> =
+  | BackgroundReplies[T]
+  | ErrorReply
+  | (T extends ExtensionPageMessageType ? never : IgnoredReply);
+
+export type OffscreenMessage =
+  | { target: "offscreen"; type: "MATCH"; key: string; request: MatchRequest }
+  | { target: "offscreen"; type: "CANCEL"; key: string };
+
 export type ContentMessage =
   | { target: "content"; type: "PING" }
   | { target: "content"; type: "ENABLEMENT"; enabled: boolean }
@@ -131,41 +174,42 @@ export type ContentMessage =
   | {
       target: "content";
       type: "NAVIGATE";
-      rowId: string;
       localIndex: number;
       queryRevision: number;
       indexRevision: number;
     }
   | { target: "content"; type: "RESTORE_FOCUS" };
 
-export interface HelloResponse {
-  enabled: boolean;
-  identity: FrameIdentity;
-  state: TabState;
-}
-
-export const createRow = (): SearchRow => ({
-  id: crypto.randomUUID(),
+export const createSearch = (): Search => ({
   query: "",
   matchCase: false,
   wholeWord: false,
   regex: false,
 });
 
-export const createState = (): TabState => {
-  const row = createRow();
-  return { rows: [row], activeRowId: row.id, open: false, revision: 0 };
-};
+export const createState = (): TabState => ({
+  search: createSearch(),
+  open: false,
+  revision: 0,
+});
 
-export const singleSearchState = (state: TabState): TabState => {
-  // Retain the active query if session data came from the multi-search version.
-  const { id, query, matchCase, wholeWord, regex } =
-    state.rows.find((row) => row.id === state.activeRowId) ??
-    state.rows[0] ??
-    createRow();
+/** Returns a clean copy of a well-formed state, or undefined for anything else. */
+export const readState = (value: unknown): TabState | undefined => {
+  const state = value as Partial<TabState> | undefined;
+  const search = state?.search;
+  if (
+    typeof search?.query !== "string" ||
+    typeof search.matchCase !== "boolean" ||
+    typeof search.wholeWord !== "boolean" ||
+    typeof search.regex !== "boolean" ||
+    typeof state?.open !== "boolean" ||
+    typeof state.revision !== "number"
+  ) {
+    return undefined;
+  }
+  const { query, matchCase, wholeWord, regex } = search;
   return {
-    rows: [{ id, query, matchCase, wholeWord, regex }],
-    activeRowId: id,
+    search: { query, matchCase, wholeWord, regex },
     open: state.open,
     revision: state.revision,
   };
@@ -174,11 +218,12 @@ export const singleSearchState = (state: TabState): TabState => {
 export const frameKey = (identity: FrameIdentity): string =>
   `${identity.tabId}/${identity.frameId}/${identity.documentId}`;
 
-export const queryKey = (row: SearchRow): string =>
-  JSON.stringify([row.query, row.matchCase, row.wholeWord, row.regex]);
+export const queryKey = (search: Search): string =>
+  JSON.stringify([search.query, search.matchCase, search.wholeWord, search.regex]);
 
-export const send = <T = unknown>(message: BackgroundMessage): Promise<T> =>
-  chrome.runtime.sendMessage(message);
+export const send = <M extends BackgroundMessage>(
+  message: M,
+): Promise<BackgroundReply<M["type"]>> => chrome.runtime.sendMessage(message);
 
 export const focusedElement = (): HTMLElement | undefined =>
   document.activeElement instanceof HTMLElement
