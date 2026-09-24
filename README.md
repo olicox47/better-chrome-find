@@ -2,7 +2,12 @@
 
 <img src="public/icons/icon-128.png" width="64" height="64" alt="Better Chrome Find logo">
 
-A Chrome extension that replaces the built-in Find bar (Cmd/Ctrl+F) with one that supports case-sensitive, whole-word and regex matching, in any combination. One search per tab.
+A Chrome extension that replaces the built-in Find bar (Cmd/Ctrl+F) with a VS Code-style search: case-sensitive, whole-word and regex toggles that work in any combination. One search per tab.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img src="docs/screenshot-light.png" alt="The Better Chrome Find bar searching a page with the regex invoice-\d+, showing match 2 of 4 highlighted in orange and the other matches in yellow">
+</picture>
 
 ## Install
 
@@ -43,6 +48,7 @@ npm test               # unit tests (vitest)
 npx playwright install chromium
 npm run test:browser   # extension tests in Playwright
 npm run test:chrome    # smoke test against installed Chrome
+npm run screenshots    # regenerate the README screenshots in docs/
 ```
 
 Source is TypeScript under `src/`. The panel lives in a Shadow DOM, and matches are painted with CSS Custom Highlights. Regex matching runs in terminable workers in an offscreen document, so a slow pattern can't freeze the page.

@@ -9,6 +9,7 @@
     "test": "vitest run tests/matcher.test.ts tests/enablement.test.ts",
     "test:browser": "playwright test",
     "test:chrome": "node scripts/chrome-smoke.mjs",
+    "screenshots": "npm run build && node scripts/readme-screenshots.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
