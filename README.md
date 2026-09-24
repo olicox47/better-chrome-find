@@ -2,9 +2,11 @@
 
 <img src="public/icons/icon-128.png" width="64" height="64" alt="Better Chrome Find logo">
 
-A compact replacement for Chrome's Find bar with case-sensitive, whole-word and regex matching, in any combination. One search per tab.
+A Chrome extension that replaces the built-in Find bar (Cmd/Ctrl+F) with one that supports case-sensitive, whole-word and regex matching, in any combination. One search per tab.
 
 ## Install
+
+The extension isn't on the Chrome Web Store, so you build it and load it unpacked:
 
 1. Run `npm ci && npm run build`.
 2. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select the `dist` folder.
